@@ -679,7 +679,7 @@ function _solve!(
     @parallel (@idx ni) accumulate_tensor!(stokes.EII_pl, @tensor_center(stokes.ε_pl), dt)
 
     print("############################################\n")
-    print("Pseudo transient adjoint solver incoooooming2")
+    print("Pseudo transient adjoint solver incoooooming\n")
     print("############################################\n")
 
         # adjoint variables
@@ -701,7 +701,7 @@ function _solve!(
         R̄esP  = @zeros(nx,ny)
 
         print("############################################\n")
-        print("Enzyme START")
+        print("Enzyme START\n")
         print("############################################\n")
     
     
@@ -718,7 +718,7 @@ function _solve!(
         ) AD.autodiff_deferred!(Enzyme.Reverse, compute_V!, DuplicatedNoNeed(Vx, V̄x), Const(Vx), Const(Vx_on_Vy),Const(P),Const(τxx),Const(τyy),Const(τxy),Const(ηdτ),Const(ρgx),Const(ρgy),Const(ητ),Const(_dx),Const(_dy),Const(dt))
 
         print("############################################\n")
-        print("Enzyme END")
+        print("Enzyme END\n")
         print("############################################\n")
     
     
