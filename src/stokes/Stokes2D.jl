@@ -701,33 +701,33 @@ function _solve!(
         R̄esP  = @zeros(nx,ny)
     
     
-     #   @parallel configcall=compute_V!(
-     #       @velocity(stokes)...,
-     #       Vx_on_Vy,
-     #       θ,
-     #       @stress(stokes)...,
-     #       pt_stokes.ηdτ,
-     #       ρg...,
-     #       ητ,
-     #       _di...,
-     #       dt * free_surface,
-     #   ) AD.autodiff_deferred!(Enzyme.Reverse, compute_V!, DuplicatedNoNeed(Vx, V̄x), Const(Vx), Const(Vx_on_Vy),Const(P),Const(τxx),Const(τyy),Const(τxy),Const(ηdτ),Const(ρgx),Const(ρgy),Const(ητ),Const(_dx),Const(_dy),Const(dt))
+        @parallel configcall=compute_V!(
+            @velocity(stokes)...,
+            Vx_on_Vy,
+            θ,
+            @stress(stokes)...,
+            pt_stokes.ηdτ,
+            ρg...,
+            ητ,
+            _di...,
+            dt * free_surface,
+        ) AD.autodiff_deferred!(Enzyme.Reverse, compute_V!, DuplicatedNoNeed(Vx, V̄x), Const(Vx), Const(Vx_on_Vy),Const(P),Const(τxx),Const(τyy),Const(τxy),Const(ηdτ),Const(ρgx),Const(ρgy),Const(ητ),Const(_dx),Const(_dy),Const(dt))
     
 
      print("############################################\n")
      print("Enzyme START")
      print("############################################\n")
     
-            @parallel ∇=(Vx->V̄x, Vy->V̄y) compute_V!(
-                @velocity(stokes)...,
-                Vx_on_Vy,
-                θ,
-                @stress(stokes)...,
-                pt_stokes.ηdτ,
-                ρg...,
-                ητ,
-                _di...,
-                dt * free_surface,)
+    #        @parallel ∇=(Vx->V̄x, Vy->V̄y) compute_V!(
+    #            @velocity(stokes)...,
+    #            Vx_on_Vy,
+    #            θ,
+    #            @stress(stokes)...,
+    #            pt_stokes.ηdτ,
+    #            ρg...,
+    #            ητ,
+    #            _di...,
+    #            dt * free_surface,)
 
     print("############################################\n")
     print("Enzyme END")
