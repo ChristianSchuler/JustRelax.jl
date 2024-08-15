@@ -713,6 +713,10 @@ function _solve!(
      #       dt * free_surface,
      #   ) AD.autodiff_deferred!(Enzyme.Reverse, compute_V!, DuplicatedNoNeed(Vx, V̄x), Const(Vx), Const(Vx_on_Vy),Const(P),Const(τxx),Const(τyy),Const(τxy),Const(ηdτ),Const(ρgx),Const(ρgy),Const(ητ),Const(_dx),Const(_dy),Const(dt))
     
+
+     print("############################################\n")
+     print("Enzyme START")
+     print("############################################\n")
     
             @parallel ∇=(Vx->V̄x, Vy->V̄y) compute_V!(
                 @velocity(stokes)...,
@@ -726,7 +730,7 @@ function _solve!(
                 dt * free_surface,)
 
     print("############################################\n")
-    print("Enzyme")
+    print("Enzyme END")
     print("############################################\n")
 
 
