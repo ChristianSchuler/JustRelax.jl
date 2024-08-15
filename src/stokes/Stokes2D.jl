@@ -679,8 +679,57 @@ function _solve!(
     @parallel (@idx ni) accumulate_tensor!(stokes.EII_pl, @tensor_center(stokes.ε_pl), dt)
 
     print("############################################\n")
-    print("Pseudo transient adjoint solver incoooooming2")
+    print("Pseudo transient adjoint solver incoooooming")
     print("############################################\n")
+
+        # adjoint variables
+        nx    = ni[1]
+        ny    = ni[2]
+        V̄x    = @zeros(nx+1,ny)   
+        V̄y    = @zeros(nx,ny+1)
+        s̄_xx  = @zeros(nx,ny)
+        s̄_yy  = @zeros(nx,ny)
+        s̄_xy  = @zeros(nx-1,ny-1)
+        P̄     = @zeros(nx,ny)
+    
+        Ψ_Vx    = @zeros(nx+1,ny)
+        Ψ_Vy    = @zeros(nx,ny+1)
+        Ψ_P     = @zeros(nx,ny) 
+    
+        R̄esVx = @zeros(nx+1,ny)
+        R̄esVy = @zeros(nx,ny+1)
+        R̄esP  = @zeros(nx,ny)
+    
+    
+     #   @parallel configcall=compute_V!(
+     #       @velocity(stokes)...,
+     #       Vx_on_Vy,
+     #       θ,
+     #       @stress(stokes)...,
+     #       pt_stokes.ηdτ,
+     #       ρg...,
+     #       ητ,
+     #       _di...,
+     #       dt * free_surface,
+     #   ) AD.autodiff_deferred!(Enzyme.Reverse, compute_V!, DuplicatedNoNeed(Vx, V̄x), Const(Vx), Const(Vx_on_Vy),Const(P),Const(τxx),Const(τyy),Const(τxy),Const(ηdτ),Const(ρgx),Const(ρgy),Const(ητ),Const(_dx),Const(_dy),Const(dt))
+    
+    
+            @parallel ∇=(Vx->V̄x, Vy->V̄y) compute_V!(
+                @velocity(stokes)...,
+                Vx_on_Vy,
+                θ,
+                @stress(stokes)...,
+                pt_stokes.ηdτ,
+                ρg...,
+                ητ,
+                _di...,
+                dt * free_surface,)
+
+    print("############################################\n")
+    print("Enzyme")
+    print("############################################\n")
+
+
 
     return (
         iter=iter,
