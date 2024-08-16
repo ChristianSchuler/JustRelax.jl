@@ -685,54 +685,113 @@ function _solve!(
         # adjoint variables
         nx    = ni[1]
         ny    = ni[2]
-        V̄x    = @zeros(nx+1,ny)   
-        V̄y    = @zeros(nx,ny+1)
-        s̄_xx  = @zeros(nx,ny)
-        s̄_yy  = @zeros(nx,ny)
-        s̄_xy  = @zeros(nx-1,ny-1)
-        P̄     = @zeros(nx,ny)
-    
-        Ψ_Vx    = @zeros(nx+1,ny)
-        Ψ_Vy    = @zeros(nx,ny+1)
-        Ψ_P     = @zeros(nx,ny) 
-    
-        R̄esVx = @zeros(nx+1,ny)
-        R̄esVy = @zeros(nx,ny+1)
-        R̄esP  = @zeros(nx,ny)
+        Vx    = stokes.V.Vx   
+        Vy    = stokes.V.Vy
+        V̄x    = @zeros(size(Vx))   
+        V̄y    = @zeros(size(Vy))
+        ∇V   = stokes.∇V    
+        ∇Vb   = @zeros(size(stokes.∇V))
+        P     = stokes.P
+        P̄     = @zeros(size(P))
 
+        stress = @stress(stokes)
+        τxx    = stress[1]
+        τyy    = stress[2]
+        τxy    = stress[3]
+        s̄_xx  = @zeros(size(τxx))   
+        s̄_yy  = @zeros(size(τyy))
+        s̄_xy  = @zeros(size(τxy))
+
+        strain = @strain(stokes)
+        epsxx    = strain[1]
+        epsyy    = strain[2]
+        epsxy    = strain[3]
+        epsb_xx  = @zeros(size(epsxx))   
+        epsb_yy  = @zeros(size(epsyy))
+        epsb_xy  = @zeros(size(epsxy))
+
+        ρgx    = ρg[1]
+        ρgy    = ρg[2]
+        dx     =_di[1]
+        dy     =_di[2]
+        dt     = dt * free_surface
+        
+        ResVx = stokes.R.Rx
+        ResVy = stokes.R.Ry
+        ResP  = @zeros(nx-1,ny-1)
+
+        R̄esVx = @zeros(size(ResVx))
+        R̄esVy = @zeros(size(ResVy))
+        R̄esP  = @zeros(nx-1,ny-1)
+
+        Ψ_Vx    = @zeros(size(ResVx))
+        Ψ_Vy    = @zeros(size(ResVy))
+        Ψ_P     = @zeros(nx-1,ny-1)
+    
         print("############################################\n")
         print("Enzyme START\n")
         print("############################################\n")
-    
-    
-        @parallel configcall=compute_V!(
-            @velocity(stokes)...,
-            Vx_on_Vy,
+
+        Enzyme.API.runtimeActivity!(true)
+
+        iter = 1
+        iterMax =10
+
+        @time begin
+        while iter ≤ iterMax
+
+        V̄x .=  0.0
+        V̄y .=  0.0  # sensitivity w.r.t. Vy
+        P̄  .=  0.0
+
+        V̄y[40:44,end-10] .= -1.0
+
+        R̄esVx .= Ψ_Vx
+        R̄esVy .= Ψ_Vy
+        @parallel (@idx ni) configcall=compute_Res!(ResVx,ResVy,Vx,Vy,Vx_on_Vy, P, τxx, τyy, τxy, ρgx, ρgy, dx, dy, dt) AD.autodiff_deferred!(Enzyme.Reverse, compute_Res!,DuplicatedNoNeed(ResVx, R̄esVx),DuplicatedNoNeed(ResVy, R̄esVy),Const(Vx),Const(Vy),Const(Vx_on_Vy),DuplicatedNoNeed(P,P̄),DuplicatedNoNeed(τxx,s̄_xx),DuplicatedNoNeed(τyy,s̄_yy),DuplicatedNoNeed(τxy,s̄_xy),Const(ρgx),Const(ρgy),Const(dx),Const(dy),Const(dt))
+
+
+        @parallel (@idx ni) compute_τ_nonlinear!(
+            @tensor_center(stokes.τ),
+            stokes.τ.II,
+            @tensor_center(stokes.τ_o),
+            @strain(stokes),
+            @tensor_center(stokes.ε_pl),
+            stokes.EII_pl,
+            stokes.P,
             θ,
-            @stress(stokes)...,
-            pt_stokes.ηdτ,
-            ρg...,
-            ητ,
-            _di...,
-            dt * free_surface,
-        ) AD.autodiff_deferred!(Enzyme.Reverse, compute_V!, DuplicatedNoNeed(Vx, V̄x), Const(Vx), Const(Vx_on_Vy),Const(P),Const(τxx),Const(τyy),Const(τxy),Const(ηdτ),Const(ρgx),Const(ρgy),Const(ητ),Const(_dx),Const(_dy),Const(dt))
+            η,
+            η_vep,
+            λ,
+            phase_ratios.center,
+            tupleize(rheology), # needs to be a tuple
+            dt,
+            θ_dτ,
+            args,
+        )
+
+
+        @parallel (@idx ni .+ 1) configcall=compute_strain_rate!(epsxx,epsyy,epsxy,∇V,Vx,Vy,dx,dy) 
+
+
+        #compute_Res!(Rx, Ry, Vx, Vy, Vx_on_Vy, P, τxx, τyy, τxy, ρgx, ρgy, _dx, _dy, dt)
+
+        #@parallel configcall=compute_V!(Vx,Vy,Vx_on_Vy,P,τxx,τyy,τxy,pt_stokes.ηdτ,ρgx,ρgy,ητ,dx,dy,dt * free_surface) AD.autodiff_deferred!(Enzyme.Reverse, compute_V!,DuplicatedNoNeed(Vx, V̄x),DuplicatedNoNeed(Vy, V̄y),Const(Vx_on_Vy),Const(P),Const(τxx),Const(τyy),Const(τxy),Const(pt_stokes.ηdτ),Const(ρgx),Const(ρgy),Const(ητ),Const(dx),Const(dy),Const(dt * free_surface))
+
+        #@parallel (@idx ni) configcall=compute_∇V!(stokes.∇V, @velocity(stokes)..., _di...) AD.autodiff_deferred!(Enzyme.Reverse, compute_∇V!,DuplicatedNoNeed(stokes.∇V,∇Vb),DuplicatedNoNeed(Vx, V̄x),DuplicatedNoNeed(Vy, V̄y),Const(dx),Const(dy))
+    
+        iter += 1
+    
+        
+        end
+
+    end
+          
 
         print("############################################\n")
         print("Enzyme END\n")
         print("############################################\n")
-    
-    
-    #        @parallel ∇=(Vx->V̄x, Vy->V̄y) compute_V!(
-    #            @velocity(stokes)...,
-    #            Vx_on_Vy,
-    #            θ,
-    #            @stress(stokes)...,
-    #            pt_stokes.ηdτ,
-    #            ρg...,
-    #            ητ,
-    #            _di...,
-    #            dt * free_surface,)
-
+            
 
 
 

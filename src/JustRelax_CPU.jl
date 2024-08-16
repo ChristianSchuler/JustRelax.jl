@@ -8,6 +8,7 @@ using ImplicitGlobalGrid
 using GeoParams, LinearAlgebra, Printf
 using Statistics
 using MPI
+using Enzyme
 
 import JustRelax: IGG, BackendTrait, CPUBackendTrait, backend, CPUBackend
 import JustRelax: PTStokesCoeffs
