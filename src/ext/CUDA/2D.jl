@@ -4,6 +4,7 @@ using JustRelax: JustRelax
 using CUDA
 using StaticArrays
 using CellArrays
+using Enzyme
 using ParallelStencil, ParallelStencil.FiniteDifferences2D
 using ImplicitGlobalGrid
 using GeoParams, LinearAlgebra, Printf

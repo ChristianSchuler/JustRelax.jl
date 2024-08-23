@@ -1,6 +1,7 @@
 module JustRelaxCUDAExt
 
 using CUDA
+using Enzyme
 using JustRelax: JustRelax
 import JustRelax: PTArray, backend, CUDABackendTrait
 

@@ -458,6 +458,7 @@ end
 
 function _solve!(
     stokes::JustRelax.StokesArrays,
+    stokesAD::JustRelax.StokesArrays,
     pt_stokes,
     di::NTuple{2,T},
     flow_bcs::AbstractFlowBoundaryConditions,
@@ -590,6 +591,7 @@ function _solve!(
                 θ_dτ,
                 args,
             )
+
             center2vertex!(stokes.τ.xy, stokes.τ.xy_c)
             # update_halo!(stokes.τ.xy)
 
@@ -670,88 +672,68 @@ function _solve!(
         end
     end
 
-    stokes.P .= θ # θ = P + plastic_overpressure
-
-    @parallel (@idx ni .+ 1) multi_copy!(@tensor(stokes.τ_o), @tensor(stokes.τ))
-    @parallel (@idx ni) multi_copy!(@tensor_center(stokes.τ_o), @tensor_center(stokes.τ))
-
-    # accumulate plastic strain tensor
-    @parallel (@idx ni) accumulate_tensor!(stokes.EII_pl, @tensor_center(stokes.ε_pl), dt)
-
     print("############################################\n")
     print("Pseudo transient adjoint solver incoooooming\n")
     print("############################################\n")
 
         # adjoint variables
-        nx    = ni[1]
-        ny    = ni[2]
-        Vx    = stokes.V.Vx   
-        Vy    = stokes.V.Vy
-        V̄x    = @zeros(size(Vx))   
-        V̄y    = @zeros(size(Vy))
-        ∇V   = stokes.∇V    
-        ∇Vb   = @zeros(size(stokes.∇V))
-        P     = stokes.P
-        P̄     = @zeros(size(P))
+        Ψ_Vx    = @zeros(size(stokesAD.V.Vx))
+        Ψ_Vy    = @zeros(size(stokesAD.V.Vy))
+        Ψ_P     = @zeros(size(stokesAD.P))
 
-        stress = @stress(stokes)
-        τxx    = stress[1]
-        τyy    = stress[2]
-        τxy    = stress[3]
-        s̄_xx  = @zeros(size(τxx))   
-        s̄_yy  = @zeros(size(τyy))
-        s̄_xy  = @zeros(size(τxy))
+        free_surface = false    # deactivate free surface terms for AD
 
-        strain = @strain(stokes)
-        epsxx    = strain[1]
-        epsyy    = strain[2]
-        epsxy    = strain[3]
-        epsb_xx  = @zeros(size(epsxx))   
-        epsb_yy  = @zeros(size(epsyy))
-        epsb_xy  = @zeros(size(epsxy))
-
-        ρgx    = ρg[1]
-        ρgy    = ρg[2]
-        dx     =_di[1]
-        dy     =_di[2]
-        dt     = dt * free_surface
-        
-        ResVx = stokes.R.Rx
-        ResVy = stokes.R.Ry
-        ResP  = @zeros(nx-1,ny-1)
-
-        R̄esVx = @zeros(size(ResVx))
-        R̄esVy = @zeros(size(ResVy))
-        R̄esP  = @zeros(nx-1,ny-1)
-
-        Ψ_Vx    = @zeros(size(ResVx))
-        Ψ_Vy    = @zeros(size(ResVy))
-        Ψ_P     = @zeros(nx-1,ny-1)
-    
         print("############################################\n")
         print("Enzyme START\n")
         print("############################################\n")
 
         Enzyme.API.runtimeActivity!(true)
 
+        # errors
+        err = 1.0
+        ϵ  = 1e3 * ϵ 
+        err_evo1 = Float64[]
+        err_evo2 = Float64[]
+        norm_Rx = Float64[]
+        norm_Ry = Float64[]
+        norm_∇V = Float64[]
+        sizehint!(norm_Rx, Int(iterMax))
+        sizehint!(norm_Ry, Int(iterMax))
+        sizehint!(norm_∇V, Int(iterMax))
+        sizehint!(err_evo1, Int(iterMax))
+        sizehint!(err_evo2, Int(iterMax))
+        nout = 1e3
         iter = 1
-        iterMax =10
+        iterMax = 1e7
 
         @time begin
-        while iter ≤ iterMax
 
-        V̄x .=  0.0
-        V̄y .=  0.0  # sensitivity w.r.t. Vy
-        P̄  .=  0.0
+        while (iter ≤ iterMax && err > ϵ)
+            #iterMin < iter && err < ϵ && break
 
-        V̄y[40:44,end-10] .= -1.0
+        @views stokesAD.V.Vx .=  @zeros(size(stokesAD.V.Vx))
+        @views stokesAD.V.Vy .=  @zeros(size(stokesAD.V.Vy))
+        @views stokesAD.P    .=  @zeros(size(stokesAD.P))
+        #@views stokesAD.V.Vy[64:end-63,end-30] .= -1.0
+        #@views stokesAD.V.Vy[32:end-31,end-15] .= -1.0
+        @views stokesAD.V.Vy[16:end-15,end-8] .= -1.0
 
-        R̄esVx .= Ψ_Vx
-        R̄esVy .= Ψ_Vy
-        @parallel (@idx ni) configcall=compute_Res!(ResVx,ResVy,Vx,Vy,Vx_on_Vy, P, τxx, τyy, τxy, ρgx, ρgy, dx, dy, dt) AD.autodiff_deferred!(Enzyme.Reverse, compute_Res!,DuplicatedNoNeed(ResVx, R̄esVx),DuplicatedNoNeed(ResVy, R̄esVy),Const(Vx),Const(Vy),Const(Vx_on_Vy),DuplicatedNoNeed(P,P̄),DuplicatedNoNeed(τxx,s̄_xx),DuplicatedNoNeed(τyy,s̄_yy),DuplicatedNoNeed(τxy,s̄_xy),Const(ρgx),Const(ρgy),Const(dx),Const(dy),Const(dt))
+        @views stokesAD.R.Rx .= Ψ_Vx[2:end-1,2:end-1]
+        @views stokesAD.R.Ry .= Ψ_Vy[2:end-1,2:end-1]
+        
+        @parallel (@idx ni) configcall=compute_Res!(
+            stokes.R.Rx,
+            stokes.R.Ry,
+            @velocity(stokes)...,
+            Vx_on_Vy, stokes.P, 
+            @stress(stokes)...,
+            ρg...,
+            _di...,
+            dt * free_surface) AD.autodiff_deferred!(Enzyme.Reverse, compute_Res!,DuplicatedNoNeed(stokes.R.Rx, stokesAD.R.Rx),DuplicatedNoNeed(stokes.R.Ry, stokesAD.R.Ry),Const(stokes.V.Vx),Const(stokes.V.Vy),Const(Vx_on_Vy),DuplicatedNoNeed(stokes.P,stokesAD.P),DuplicatedNoNeed(stokes.τ.xx,stokesAD.τ.xx),DuplicatedNoNeed(stokes.τ.yy,stokesAD.τ.yy),DuplicatedNoNeed(stokes.τ.xy,stokesAD.τ.xy),Const(ρg[1]),Const(ρg[2]),Const(_di[1]),Const(_di[2]),Const(dt * free_surface))
 
+        vertex2center!(stokesAD.τ.xy_c, stokesAD.τ.xy)
 
-        @parallel (@idx ni) compute_τ_nonlinear!(
+        @parallel (@idx ni) configcall=compute_τ_nonlinear!(
             @tensor_center(stokes.τ),
             stokes.τ.II,
             @tensor_center(stokes.τ_o),
@@ -768,31 +750,135 @@ function _solve!(
             dt,
             θ_dτ,
             args,
-        )
+        ) AD.autodiff_deferred!(Enzyme.Reverse,compute_τ_nonlinear!,DuplicatedNoNeed(@tensor_center(stokes.τ),@tensor_center(stokesAD.τ)),Const(stokes.τ.II),Const(@tensor_center(stokes.τ_o)),DuplicatedNoNeed(@strain(stokes),@strain(stokesAD)),Const(@tensor_center(stokes.ε_pl)),Const(stokes.EII_pl),Const(stokes.P),Const(θ),Const(η),Const(η_vep),Const(λ),Const(phase_ratios.center),Const(tupleize(rheology)),Const(dt),Const(θ_dτ),Const(args))
 
+        #center2vertex!(stokesAD.τ.xy, stokesAD.τ.xy_c)
+        
+        @parallel (@idx ni .+ 1) configcall=compute_strain_rate!(
+            @strain(stokes)...,
+            stokes.∇V,
+            @velocity(stokes)...,
+            _di...) AD.autodiff_deferred!(Enzyme.Reverse, compute_strain_rate!,DuplicatedNoNeed(stokes.ε.xx,stokesAD.ε.xx),DuplicatedNoNeed(stokes.ε.yy,stokesAD.ε.yy),DuplicatedNoNeed(stokes.ε.xy,stokesAD.ε.xy),DuplicatedNoNeed(stokes.∇V,stokesAD.∇V),DuplicatedNoNeed(stokes.V.Vx,stokesAD.V.Vx),DuplicatedNoNeed(stokes.V.Vy,stokesAD.V.Vy),Const(_di[1]),Const(_di[2]))
 
-        @parallel (@idx ni .+ 1) configcall=compute_strain_rate!(epsxx,epsyy,epsxy,∇V,Vx,Vy,dx,dy) 
+        compute_P!(
+            Ψ_P,
+            @zeros(size(stokesAD.R.RP)),
+            @zeros(size(stokesAD.R.RP)),
+            stokesAD.P,
+            ητ,
+            rheology,
+            phase_ratios.center,
+            dt,
+            r,
+            θ_dτ,
+            args,
+            )
 
+        @views stokesAD.∇V .= Ψ_P
 
-        #compute_Res!(Rx, Ry, Vx, Vy, Vx_on_Vy, P, τxx, τyy, τxy, ρgx, ρgy, _dx, _dy, dt)
+        @parallel (@idx ni) configcall=compute_∇V!(stokes.∇V,@velocity(stokes)..., _di...) AD.autodiff_deferred!(Enzyme.Reverse, compute_∇V!,DuplicatedNoNeed(stokes.∇V,stokesAD.∇V),DuplicatedNoNeed(stokes.V.Vx,stokesAD.V.Vx),DuplicatedNoNeed(stokes.V.Vy,stokesAD.V.Vy),Const(_di[1]),Const(_di[2]))
 
-        #@parallel configcall=compute_V!(Vx,Vy,Vx_on_Vy,P,τxx,τyy,τxy,pt_stokes.ηdτ,ρgx,ρgy,ητ,dx,dy,dt * free_surface) AD.autodiff_deferred!(Enzyme.Reverse, compute_V!,DuplicatedNoNeed(Vx, V̄x),DuplicatedNoNeed(Vy, V̄y),Const(Vx_on_Vy),Const(P),Const(τxx),Const(τyy),Const(τxy),Const(pt_stokes.ηdτ),Const(ρgx),Const(ρgy),Const(ητ),Const(dx),Const(dy),Const(dt * free_surface))
-
-        #@parallel (@idx ni) configcall=compute_∇V!(stokes.∇V, @velocity(stokes)..., _di...) AD.autodiff_deferred!(Enzyme.Reverse, compute_∇V!,DuplicatedNoNeed(stokes.∇V,∇Vb),DuplicatedNoNeed(Vx, V̄x),DuplicatedNoNeed(Vy, V̄y),Const(dx),Const(dy))
     
+        @views stokesAD.V.Vx[[1,2,end-1,end], :] .= 0.0
+        @views stokesAD.V.Vx[:, [1,2,end-1,end]] .= 0.0
+        @views stokesAD.V.Vy[[1,2,end-1,end], :] .= 0.0
+        @views stokesAD.V.Vy[:, [1,2,end-1,end]] .= 0.0
+
+        @parallel update_V!(Ψ_Vx, Ψ_Vy, stokesAD.V.Vx, stokesAD.V.Vy, Vx_on_Vy, ηdτ, ρg[2], ητ, _di..., dt* free_surface)
+
         iter += 1
+
+        if iter % nout == 0 && iter > 1
+
+            #er_η = norm_mpi(@.(log10(η) - log10(η0)))
+            #er_η < 1e-3 && (do_visc = false)
+            #@parallel (@idx ni) compute_Res!(ResVx,ResVy,Vx,Vy,Vx_on_Vy, P, τxx, τyy, τxy, ρgx, ρgy, dx, dy, dt)
+            # errs = maximum_mpi.((abs.(stokes.R.Rx), abs.(stokes.R.Ry), abs.(stokes.R.RP)))
+            errs = (
+                norm_mpi(@views @velocity(stokesAD)[1][2:(end - 1), 2:(end - 1)]) /
+                length(@velocity(stokesAD)[1]),
+                norm_mpi(@views @velocity(stokesAD)[2][2:(end - 1), 2:(end - 1)]) /
+                length(@velocity(stokesAD)[2]),
+                norm_mpi(stokesAD.P) / length(stokesAD.P),
+            )
+            #global normVx,normVy,normP,it
+            push!(norm_Rx,sqrt(sum((abs.(@velocity(stokesAD)[1]).^2)))); push!(norm_Ry,sqrt(sum((abs.(@velocity(stokesAD)[2]).^2)))); push!(norm_∇V,sqrt(sum((abs.(stokesAD.P).^2))))
+         
+            push!(norm_Rx, errs[1])
+            push!(norm_Ry, errs[2])
+            push!(norm_∇V, errs[3])
+            err = maximum_mpi(errs)
+            push!(err_evo1, err)
+            push!(err_evo2, iter)
+
+            if igg.me == 0 #&& ((verbose && err > ϵ) || iter == iterMax)
+                @printf(
+                    "Total steps = %d, err = %1.3e [norm_Rx=%1.3e, norm_Ry=%1.3e, norm_∇V=%1.3e] \n",
+                    iter,
+                    err,
+                    norm_Rx[end],
+                    norm_Ry[end],
+                    norm_∇V[end]
+                )
+            end
+            isnan(err) && error("NaN(s)")
+        end
     
         
         end
 
     end
-          
 
-        print("############################################\n")
-        print("Enzyme END\n")
-        print("############################################\n")
+    # calculate the sensitivity
+
+    ηb     = @zeros(size(η))
+    ρb     = @zeros(size(ρg[2]))
+    stokesAD.R.Rx .= -Ψ_Vx[2:end-1,2:end-1]
+    stokesAD.R.Ry .= -Ψ_Vy[2:end-1,2:end-1]
+    
+    @parallel (@idx ni) configcall=compute_Res!(stokes.R.Rx,stokes.R.Ry,@velocity(stokes)...,Vx_on_Vy, stokes.P, @stress(stokes)..., ρg..., _di..., dt * free_surface) AD.autodiff_deferred!(Enzyme.Reverse, compute_Res!,DuplicatedNoNeed(stokes.R.Rx, stokesAD.R.Rx),DuplicatedNoNeed(stokes.R.Ry, stokesAD.R.Ry),DuplicatedNoNeed(stokes.V.Vx,stokesAD.V.Vx),DuplicatedNoNeed(stokes.V.Vy,stokesAD.V.Vy),Const(Vx_on_Vy),DuplicatedNoNeed(stokes.P,stokesAD.P),DuplicatedNoNeed(stokes.τ.xx,stokesAD.τ.xx),DuplicatedNoNeed(stokes.τ.yy,stokesAD.τ.yy),DuplicatedNoNeed(stokes.τ.xy,stokesAD.τ.xy),Const(ρg[1]),DuplicatedNoNeed(ρg[2],ρb),Const(_di[1]),Const(_di[2]),Const(dt * free_surface))
+ 
+    #vertex2center!(stokes.τ.xy_c, stokes.τ.xy)
+    vertex2center!(stokesAD.τ.xy_c, stokesAD.τ.xy)
+
+    @parallel (@idx ni) configcall=compute_τ_nonlinearADNT!(
+        stokes.τ.xx,    # @ centers
+        stokes.τ.yy,    # @ centers
+        stokes.τ.xy_c,  # @ centers
+        stokes.τ.II,                 # @ centers
+        @tensor_center(stokes.τ_o),  # @ centers
+        stokes.ε.xx,             # @ vertices
+        stokes.ε.yy,             # @ vertices
+        stokes.ε.xy,             # @ vertices
+        @tensor_center(stokes.ε_pl), # @ centers
+        stokes.EII_pl,
+        stokes.P,
+        θ,
+        η,
+        η_vep,
+        λ,
+        phase_ratios.center,
+        tupleize(rheology),
+        dt,
+        θ_dτ,
+        args,
+    ) AD.autodiff_deferred!(Enzyme.Reverse,compute_τ_nonlinearADNT!,DuplicatedNoNeed(stokes.τ.xx,stokesAD.τ.xx),DuplicatedNoNeed(stokes.τ.yy,stokesAD.τ.yy),DuplicatedNoNeed(stokes.τ.xy_c,stokesAD.τ.xy_c),Const(stokes.τ.II),Const(@tensor_center(stokes.τ_o)),DuplicatedNoNeed(stokes.ε.xx,stokesAD.ε.xx),DuplicatedNoNeed(stokes.ε.yy,stokesAD.ε.yy),DuplicatedNoNeed(stokes.ε.xy,stokesAD.ε.xy),
+    Const(@tensor_center(stokes.ε_pl)),Const(stokes.EII_pl),Const(stokes.P),Const(θ),DuplicatedNoNeed(η,ηb),Const(η_vep),Const(λ),Const(phase_ratios.center),Const(tupleize(rheology)),Const(dt),Const(θ_dτ),Const(args))
+
+   
+    print("############################################\n")
+    print("Enzyme END\n")
+    print("############################################\n")
             
 
+        stokes.P .= θ # θ = P + plastic_overpressure
+
+        @parallel (@idx ni .+ 1) multi_copy!(@tensor(stokes.τ_o), @tensor(stokes.τ))
+        @parallel (@idx ni) multi_copy!(@tensor_center(stokes.τ_o), @tensor_center(stokes.τ))
+    
+        # accumulate plastic strain tensor
+        @parallel (@idx ni) accumulate_tensor!(stokes.EII_pl, @tensor_center(stokes.ε_pl), dt)
+        
 
 
     return (
@@ -802,5 +888,10 @@ function _solve!(
         norm_Rx=norm_Rx,
         norm_Ry=norm_Ry,
         norm_∇V=norm_∇V,
+        Ψ_Vx=Ψ_Vx,
+        Ψ_Vy=Ψ_Vy,
+        Ψ_P=Ψ_P,
+        ηb=ηb,
+        ρb=ρb,
     )
 end

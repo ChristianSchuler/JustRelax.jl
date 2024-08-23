@@ -26,6 +26,7 @@ function _compute_τ_nonlinear!(
         Base.@_inline_meta
         fma(0.5 * τij_o[i], _Gdt, εij[i])
     end
+
     # get plastic parameters (if any...)
     (; is_pl, C, sinϕ, cosϕ, η_reg, volume) = plastic_parameters
 
@@ -57,6 +58,68 @@ function _compute_τ_nonlinear!(
 
     return nothing
 end
+
+# inner kernel to compute the plastic stress update within Pseudo-Transient stress continuation
+function _compute_τ_nonlinearAD!(
+    τ::NTuple{N1,T},
+    τII,
+    τ_old::NTuple{N1,T},
+    ε::NTuple{N1,T},
+    ε_pl::NTuple{N1,T},
+    P,
+    ηij,
+    η_vep,
+    λ,
+    dτ_r,
+    _Gdt,
+    plastic_parameters,
+    idx::Vararg{Integer,N2},
+) where {N1,N2,T}
+
+    # cache tensors
+    τij, τij_o, εij = cache_tensors(τ, τ_old, ε, idx...)
+
+    # Stress increment and trial stress
+    dτij, τII_trial = compute_stress_increment_and_trial(τij, τij_o, ηij, εij, _Gdt, dτ_r)
+
+    # visco-elastic strain rates
+    εij_ve = ntuple(Val(N1)) do i
+        Base.@_inline_meta
+        fma(0.5 * τij_o[i], _Gdt, εij[i])
+    end
+
+    # get plastic parameters (if any...)
+    (; is_pl, C, sinϕ, cosϕ, η_reg, volume) = plastic_parameters
+
+    # yield stess (GeoParams could be used here...)
+    τy = max(C * cosϕ + P[idx...] * sinϕ, 0)
+
+    # check if yielding; if so, compute plastic strain rate (λdQdτ),
+    # plastic stress increment (dτ_pl), and update the plastic
+    # multiplier (λ)
+    dτij, λdQdτ = if isyielding(is_pl, τII_trial, τy)
+        # derivatives plastic stress correction
+        dτ_pl, λ[idx...], λdQdτ = compute_dτ_pl(
+            τij, dτij, τy, τII_trial, ηij, λ[idx...], η_reg, dτ_r, volume
+        )
+        dτ_pl, λdQdτ
+
+    else
+        # in this case the plastic strain rate is a tuples of zeros
+        dτij, ntuple(_ -> zero(eltype(T)), Val(N1))
+    end
+
+    # fill plastic strain rate tensor
+    update_plastic_strain_rate!(ε_pl, λdQdτ, idx)
+    # update and correct stress
+    correct_stress!(τ, τij .+ dτij, idx...)
+
+    #τII[idx...] = τII_ij = second_invariant(τij...)
+    #η_vep[idx...] = τII_ij * 0.5 * inv(second_invariant(εij_ve...))
+
+    return nothing
+end
+
 
 # fill plastic strain rate tensor
 @generated function update_plastic_strain_rate!(ε_pl::NTuple{N,T}, λdQdτ, idx) where {N,T}
@@ -90,7 +153,7 @@ function compute_dτ_pl(
     ν = 0.5
     λ = ν * λ0 + (1 - ν) * (F > 0.0) * F * inv(ηij * dτ_r + η_reg + volume)
     λ_τII = λ * 0.5 * inv(τII_trial)
-
+<
     λdQdτ = ntuple(Val(N)) do i
         Base.@_inline_meta
         # derivatives of the plastic potential

@@ -281,7 +281,6 @@ end
     return nothing
 end
 
-# multi phase visco-elasto-plastic flow, where phases are defined in the cell center
 @parallel_indices (I...) function compute_τ_nonlinear!(
     τ,      # @ centers
     τII,    # @ centers
@@ -300,6 +299,7 @@ end
     θ_dτ,
     args,
 )
+
     # numerics
     ηij = @inbounds η[I...]
     phase = @inbounds phase_center[I...]
@@ -315,6 +315,98 @@ end
     plastic_parameters = (; is_pl, C, sinϕ, cosϕ, η_reg, volume)
 
     _compute_τ_nonlinear!(
+        τ, τII, τ_old, ε, ε_pl, P, ηij, η_vep, λ, dτ_r, _Gdt, plastic_parameters, I...
+    )
+    # augmented pressure with plastic volumetric strain over pressure
+    @inbounds θ[I...] = P[I...] + (isinf(K) ? 0.0 : K * dt * λ[I...] * sinψ)
+
+    return nothing
+end
+
+# multi phase visco-elasto-plastic flow, where phases are defined in the cell center
+@parallel_indices (I...) function compute_τ_nonlinearADNT!(
+    τxx,      # @ centers
+    τyy,      # @ centers
+    τzz,      # @ centers
+    τII,    # @ centers
+    τ_old,  # @ centers
+    εxx,      # @ vertices
+    εyy,      # @ vertices
+    εxy,      # @ vertices
+    ε_pl,   # @ centers
+    EII,    # accumulated plastic strain rate @ centers
+    P,
+    θ,
+    η,
+    η_vep,
+    λ,
+    phase_center,
+    rheology,
+    dt,
+    θ_dτ,
+    args,
+)
+
+    τ = (τxx, τyy, τzz)
+    ε = (εxx, εyy, εxy)
+
+    # numerics
+    ηij = @inbounds η[I...]
+    phase = @inbounds phase_center[I...]
+    _Gdt = inv(fn_ratio(get_shear_modulus, rheology, phase) * dt)
+    dτ_r = compute_dτ_r(θ_dτ, ηij, _Gdt)
+
+    # get plastic parameters (if any...)
+    is_pl, C, sinϕ, cosϕ, sinψ, η_reg = plastic_params_phase(rheology, EII[I...], phase)
+
+    # plastic volumetric change K * dt * sinϕ * sinψ
+    K = fn_ratio(get_bulk_modulus, rheology, phase)
+    volume = isinf(K) ? 0.0 : K * dt * sinϕ * sinψ
+    plastic_parameters = (; is_pl, C, sinϕ, cosϕ, η_reg, volume)
+
+    _compute_τ_nonlinear!(
+        τ, τII, τ_old, ε, ε_pl, P, ηij, η_vep, λ, dτ_r, _Gdt, plastic_parameters, I...
+    )
+    # augmented pressure with plastic volumetric strain over pressure
+    @inbounds θ[I...] = P[I...] + (isinf(K) ? 0.0 : K * dt * λ[I...] * sinψ)
+
+    return nothing
+end
+
+@parallel_indices (I...) function compute_τ_nonlinearAD!(
+    τ,      # @ centers
+    τII,    # @ centers
+    τ_old,  # @ centers
+    ε,      # @ vertices
+    ε_pl,   # @ centers
+    EII,    # accumulated plastic strain rate @ centers
+    P,
+    θ,
+    η,
+    η_vep,
+    λ,
+    phase_center,
+    rheology,
+    dt,
+    θ_dτ,
+    args,
+)
+
+    # numerics
+    ηij = @inbounds η[I...]
+    phase = @inbounds phase_center[I...]
+    _Gdt = inv(fn_ratio(get_shear_modulus, rheology, phase) * dt)
+    dτ_r = compute_dτ_r(θ_dτ, ηij, _Gdt)
+
+    # get plastic parameters (if any...)
+    is_pl, C, sinϕ, cosϕ, sinψ, η_reg = plastic_params_phase(rheology, EII[I...], phase)
+
+    # plastic volumetric change K * dt * sinϕ * sinψ
+    K = fn_ratio(get_bulk_modulus, rheology, phase)
+    volume = isinf(K) ? 0.0 : K * dt * sinϕ * sinψ
+    plastic_parameters = (; is_pl, C, sinϕ, cosϕ, η_reg, volume)
+
+    _compute_τ_nonlinearAD!(
         τ, τII, τ_old, ε, ε_pl, P, ηij, η_vep, λ, dτ_r, _Gdt, plastic_parameters, I...
     )
     # augmented pressure with plastic volumetric strain over pressure

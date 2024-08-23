@@ -10,6 +10,7 @@ using HDF5
 using CellArrays
 using StaticArrays
 using Statistics
+using Enzyme
 
 function solve!() end
 
